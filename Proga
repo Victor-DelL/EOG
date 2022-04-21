@@ -1,0 +1,325 @@
+close all; clear all; clc;
+
+N = 3;%Выбрать сигнал - номер строчки
+%function  [OutputH,OutputV] = MMove(EOG_H,EOG_V,Fs)
+%% Загрузка массивов исходных данных
+EOG_H = load('База\EOG_Hor.mat');
+EOG_V = load('База\EOG_Ver.mat');
+
+EOG_H = EOG_H.EOGG;%Вытаскиваем данные из структуры
+EOG_V = EOG_V.EOGV;
+
+signalH = EOG_H(N,:);
+signalV = EOG_V(N,:);
+
+l = length(signalH);
+Fs = 100; % Sampling frequency (in THz)
+Ts = 1/Fs; % Sampling period (in ps)
+t = 0:Ts:(l-1)*Ts;
+
+figure('Name','Исходные сигналы','NumberTitle','off');
+subplot(2,1,1);
+plot(t,signalH);
+title('EOG горизонтальная');
+subplot(2,1,2);
+plot(t,signalV);
+title('EOG вертикальная');
+
+%% Фильтрация
+Hfilt = lowpass(signalH,9,Fs);
+Vfilt = lowpass(signalV,9,Fs);
+
+
+figure('Name','После фильтра','NumberTitle','off');
+subplot(2,1,1);
+plot(t,Hfilt);
+title('EOG горизонтальная');
+subplot(2,1,2);
+plot(t,Vfilt);
+title('EOG вертикальная');
+
+%% Квадрат сигнала
+
+td =  0:Ts*10:(l-1)*Ts;
+
+Hfil = Hfilt.^2;
+Vfil = Vfilt.^2;
+
+figure('Name','Квадрат сигнала','NumberTitle','off');
+subplot(2,1,1);
+plot(t,Hfil);
+title('EOG горизонтальная');
+subplot(2,1,2);
+plot(t,Vfil);
+title('EOG вертикальная');
+%% Скользящее среднее
+H_m = conv(Hfil ,ones(1 ,round(0.150*Fs))/round(0.150*Fs));%conv-Свертка и умножение полиномов
+V_m = conv(Vfil ,ones(1 ,round(0.150*Fs))/round(0.150*Fs));
+
+%% Result - горизонтальная пики
+delay = round(0.15*Fs/2);
+delay_signal = zeros(numel(H_m)-delay,1);
+for i=1:numel(H_m)-delay
+ delay_signal(i) = H_m(i+delay-1);
+end
+
+% Find peaks in delay signal - поиск скачков - горизонтальная состов
+peaks = [];
+window_size = round(2.5*Fs);
+threshold = 0.5;
+i = 1;
+step = window_size*0.3;
+while i<numel(delay_signal)
+ window_start_point = i;
+ if (i+window_size > numel(delay_signal)) % Обработка выхода за пределы
+ window_start_point = numel(delay_signal)-window_size;
+ step = 2*window_size;
+ end
+ 
+ % Поиск максимума в окне
+ windowMax = max(delay_signal(window_start_point:window_start_point+window_size));
+ % Определение порогового значения
+ windowThreshold = threshold*windowMax;
+ 
+ % поиск интервала, в котором лежит скачок
+ maxInterval = []; % Интервал, в котором находится скачок
+ maxFlag = 0; 
+ for j=round(window_start_point):(window_start_point+window_size)
+    if delay_signal(j) > windowThreshold
+        maxInterval(end+1) = j; % Увеличение интервала
+        maxFlag = 1;
+    else
+        if (maxFlag == 1)
+         % Поиск максимума в найденном интервале в исходном сигнале
+        [value, location] = max(Hfil(maxInterval(1):(maxInterval(end)-round(numel(maxInterval)/3))));
+        % Добавление 
+        peaks(end+1) = j - numel(maxInterval) + location; 
+        % Очистка найденного интервала
+        maxInterval = []; 
+        end
+        maxFlag = 0;
+     end
+ end
+ 
+ i = i+step;
+end
+ 
+peaksH = peaks - 1;
+y1=get(gca,'ylim');
+
+figure('Name','Скачки - горизонтальная состовляющая','NumberTitle','off');
+hold on;
+plot(Hfilt, 'b');ylim([-200 200]);
+title('Cкачки');
+ for j=1:numel(peaksH)
+    hold on,plot([peaksH(j) peaksH(j)], y1, 'r');
+ end
+hold off;
+
+% post processing
+
+peaksH = unique(peaksH);
+clearPeaksH = [];
+clearPeaksH(end+1) = 1; % Временный пик
+minDistance = 0.1*Fs;
+i = 1;
+
+while i < numel(peaksH)
+ if(peaksH(i)-clearPeaksH(end) < minDistance)
+ firstPeakH = Hfilt(peaksH(i));
+ secondPeakH = Hfilt(clearPeaksH(end));
+ if firstPeakH > secondPeakH
+    clearPeaksH(end) = [];
+    clearPeaksH(end+1) = peaksH(i); 
+ end
+ else
+    clearPeaksH(end+1) = peaksH(i);
+ end
+ i = i + 1;
+end
+clearPeaksH(1) = []; % Удаление временного пика
+y1=get(gca,'ylim');
+
+
+figure('Name','Обнаруженные скачки - горизонтальная состовляющая','NumberTitle','off');
+hold on;
+ %plot(delay_signal,'g'); 
+ plot(Hfilt, 'b');
+ ylim([-200 200])
+ title('Обнаруженные скачки');
+ for j=1:numel(clearPeaksH)
+ hold on,plot([clearPeaksH(j) clearPeaksH(j)], y1, 'r');
+ end
+hold off;
+%% Save annotation - сохранить положение отчеты скачков для горизонтальной состовляющей
+fileID = fopen('./Hpeaks.txt','w');
+fprintf(fileID,'%d ', clearPeaksH);
+fclose(fileID);
+
+%% Result - вертикальная пики
+delay = round(0.15*Fs/2);
+delay_signal = zeros(numel(V_m)-delay,1);
+for i=1:numel(V_m)-delay
+ delay_signal(i) = V_m(i+delay-1);
+end
+
+% Find peaks in delay signal - поиск скачков - горизонтальная состов
+peaks = [];
+window_size = round(2.5*Fs);
+threshold = 0.5;
+i = 1;
+step = window_size*0.3;
+while i<numel(delay_signal)
+ window_start_point = i;
+ if (i+window_size > numel(delay_signal)) % Обработка выхода за пределы
+ window_start_point = numel(delay_signal)-window_size;
+ step = 2*window_size;
+ end
+ 
+ % Поиск максимума в окне
+ windowMax = max(delay_signal(window_start_point:window_start_point+window_size));
+ % Определение порогового значения
+ windowThreshold = threshold*windowMax;
+ 
+ % поиск интервала, в котором лежит скачок
+ maxInterval = []; % Интервал, в котором находится скачок
+ maxFlag = 0; 
+ for j=round(window_start_point):(window_start_point+window_size)
+    if delay_signal(j) > windowThreshold
+        maxInterval(end+1) = j; % Увеличение интервала
+        maxFlag = 1;
+    else
+        if (maxFlag == 1)
+         % Поиск максимума в найденном интервале в исходном сигнале
+        [value, location] = max(Vfil(maxInterval(1):(maxInterval(end)-round(numel(maxInterval)/3))));
+        % Добавление 
+        peaks(end+1) = j - numel(maxInterval) + location; 
+        % Очистка найденного интервала
+        maxInterval = []; 
+        end
+        maxFlag = 0;
+     end
+ end
+ 
+ i = i+step;
+end
+ 
+peaksV = peaks - 1;
+y1=get(gca,'ylim');
+
+figure('Name','Скачки - вертикальная состовляющая','NumberTitle','off');
+hold on;
+plot(Vfilt, 'b');ylim([-200 200]);
+title('Cкачки');
+ for j=1:numel(peaksV)
+    hold on,plot([peaksV(j) peaksV(j)], y1, 'r');
+ end
+hold off;
+
+% post processing
+
+peaksV = unique(peaksV);
+clearPeaksV = [];
+clearPeaksV(end+1) = 1; % Временный пик
+minDistance = 0.1*Fs;
+i = 1;
+
+while i < numel(peaksV)
+ if(peaksV(i)-clearPeaksV(end) < minDistance)
+ firstPeakV = Hfilt(peaksV(i));
+ secondPeakV = Hfilt(clearPeaksV(end));
+ if firstPeakV > secondPeakV
+    clearPeaksV(end) = [];
+    clearPeaksV(end+1) = peaksV(i); 
+ end
+ else
+    clearPeaksV(end+1) = peaksV(i);
+ end
+ i = i + 1;
+end
+clearPeaksV(1) = []; % Удаление временного пика
+y1=get(gca,'ylim');
+
+
+figure('Name','Обнаруженные скачки - вертикальная состовляющая','NumberTitle','off');
+hold on;
+%plot(delay_signal,'g'); 
+plot(Vfilt, 'b');
+ylim([-200 200])
+title('Обнаруженные скачки');
+ for j=1:numel(clearPeaksV)
+ hold on,plot([clearPeaksV(j) clearPeaksV(j)], y1, 'r');
+ end
+hold off;
+
+%% Save annotation - сохранить положение отчеты скачков для вертикальной состовляющей
+fileID = fopen('./Vpeaks.txt','w');
+fprintf(fileID,'%d ', clearPeaksV);
+fclose(fileID);
+
+%% We determine the type of peak - Определяем вид пика
+
+for i=1:1:length(clearPeaksH)
+    c = clearPeaksH(i);
+    if Hfilt(c) < Hfilt(c-1)
+        ZHi = "Вверх";
+        ZH(i) = ZHi;
+    else
+        ZHi = "Вниз";
+        ZH(i) = ZHi;
+    end
+end
+
+for i=1:1:length(clearPeaksV)
+    c = clearPeaksV(i);
+    if Vfilt(c) < Vfilt(c-1)
+        ZVi = "Вверх";
+        ZV(i) = ZVi;
+    else
+        ZVi = "Вниз";
+        ZV(i) = ZVi';
+    end
+end
+
+%% Eye movement - движение глаза
+
+for i=1:1:length(ZH)
+    if ZH(i) == "Вверх"
+       outH(1,i) = "Вправо";
+    else
+    %end
+    %if ZH == "Вниз"
+       outH(1,i) = "Влево";
+    end
+end
+
+for i=1:1:length(ZV)
+    if ZV(i) == "Вверх"
+       outV(1,i) = "Вверх";
+    else
+    %end
+    %if ZV == "Вниз"
+       outV(1,i) = "Вниз";
+    end
+end
+
+ 
+ %% Save Out
+ 
+tH_1 = clearPeaksH./Fs;
+
+tV_1 = clearPeaksV./Fs;
+
+OutputH = [tH_1; outH];
+OutputV = [tV_1; outV];
+
+fileID = fopen('./Движение_глаза_горизонтальная.txt','w');
+fprintf(fileID,'%6s %12s\n','Время','Движение глаза');
+fprintf(fileID,'%6.2f %12s\n',OutputH);
+fclose(fileID);
+
+fileID = fopen('./Движение_глаза_вертикальная.txt','w');
+fprintf(fileID,'%6s %12s\n','Время','Движение глаза');
+fprintf(fileID,'%6.2f %12s\n',OutputV);
+fclose(fileID);
+%end
